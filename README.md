@@ -5,6 +5,8 @@
     <title>Sistema de Demandas | Corporativo</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
+    <!-- Adição da biblioteca SheetJS para exportação Excel -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700;900&display=swap');
         body { font-family: 'Inter', sans-serif; }
@@ -12,6 +14,29 @@
         .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #e2e8f0; border-radius: 10px; }
         .modal-backdrop { backdrop-filter: blur(12px); background-color: rgba(15, 23, 42, 0.7); }
+        
+        /* Estilo do botão Excel compatível com seu design */
+        .btn-excel-custom {
+            background-color: #166534;
+            color: white;
+            padding: 12px 20px;
+            border-radius: 1rem;
+            font-weight: 900;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            transition: all 0.3s ease;
+            cursor: pointer;
+            border: none;
+            text-transform: uppercase;
+            font-size: 10px;
+            letter-spacing: 0.1em;
+        }
+        .btn-excel-custom:hover {
+            background-color: #15803d;
+            transform: scale(1.05);
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+        }
     </style>
 </head>
 <body class="bg-slate-50 text-slate-900 min-h-screen flex flex-col">
@@ -52,7 +77,11 @@
                     </div>
                     <span class="tracking-tighter uppercase">Demandas</span>
                 </div>
+                
                 <div class="flex items-center gap-4">
+                    <!-- BOTÃO EXCEL (Injetado via JS dependendo do cargo) -->
+                    <div id="container-excel"></div>
+
                     <div class="text-right hidden sm:block">
                         <p id="user-info-role" class="text-[10px] uppercase font-black text-indigo-500 leading-none tracking-widest mb-1"></p>
                         <p id="user-info-name" class="text-sm font-bold text-slate-700 uppercase"></p>
@@ -168,7 +197,6 @@
             getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged 
         } from "https://www.gstatic.com/firebasejs/11.1.0/firebase-auth.js";
 
-        // CONFIGURAÇÃO ATUALIZADA
         const firebaseConfig = {
             apiKey: "AIzaSyD29RmGmXbB8tcuZXN608eKjlXhr0LKBn0",
             authDomain: "gestor-do-informa.firebaseapp.com",
@@ -181,8 +209,6 @@
         const app = initializeApp(firebaseConfig);
         const auth = getAuth(app);
         const db = getFirestore(app);
-        
-        // Identificador único para isolar dados no Firestore (mantenha como desejar)
         const appId = "gestor-informa-demandas";
 
         const CATEGORIES = ["Meio Ambiente", "Linguagens", "Comunicações", "Edição de Vídeo", "Cultura", "Secretaria", "Esportes", "Presidência", "Informações", "Designer"];
@@ -197,7 +223,6 @@
         window.addEventListener('load', () => { initAuth(); populateSelects(); });
 
         async function initAuth() {
-            // Tenta usar token inicial se disponível no ambiente, senão anônimo
             if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
                 await signInWithCustomToken(auth, __initial_auth_token);
             } else {
@@ -258,6 +283,9 @@
             if (isManager) {
                 document.getElementById('management-tools').classList.remove('hidden');
                 document.getElementById('btn-new-task').classList.remove('hidden');
+                
+                // Injetar Botão de Excel para Cargos Autorizados
+                renderExcelButton();
             }
             if (userData.isMaster) {
                 document.getElementById('btn-admin-panel').classList.remove('hidden');
@@ -265,6 +293,56 @@
 
             document.getElementById('view-subtitle').textContent = `Setor: ${userData.category}`;
             startListeners();
+        }
+
+        // Função para Renderizar Botão de Excel no Header
+        function renderExcelButton() {
+            const container = document.getElementById('container-excel');
+            container.innerHTML = `
+                <button id="btn-export-excel" class="btn-excel-custom">
+                    <i data-lucide="file-spreadsheet" class="w-4 h-4"></i>
+                    Exportar
+                </button>
+            `;
+            document.getElementById('btn-export-excel').onclick = exportToExcel;
+            lucide.createIcons();
+        }
+
+        // LÓGICA DE EXPORTAÇÃO EXCEL
+        async function exportToExcel() {
+            if (!currentUser) return;
+            
+            const wb = XLSX.utils.book_new();
+            const timestamp = new Date().toLocaleDateString('pt-PT').replace(/\//g, '-');
+
+            if (currentUser.role === 'Diretor' && !currentUser.isMaster && currentUser.category.toLowerCase() !== 'presidência') {
+                // EXPORTAÇÃO DIRETOR: Apenas sua categoria
+                const myCatTasks = allTasks.filter(t => t.category.toLowerCase() === currentUser.category.toLowerCase());
+                const ws_data = [
+                    ["TÍTULO", "DESCRIÇÃO", "CATEGORIA", "ATRIBUÍDO A", "STATUS"],
+                    ...myCatTasks.map(t => [t.title, t.description || "", t.category, t.assignedTo, t.status])
+                ];
+                const ws = XLSX.utils.aoa_to_sheet(ws_data);
+                XLSX.utils.book_append_sheet(wb, ws, currentUser.category);
+                XLSX.writeFile(wb, `Demandas_${currentUser.category}_${timestamp}.xlsx`);
+
+            } else {
+                // EXPORTAÇÃO MASTER / PRESIDÊNCIA: Todas as categorias em abas separadas
+                CATEGORIES.forEach(cat => {
+                    const catTasks = allTasks.filter(t => t.category.toLowerCase() === cat.toLowerCase());
+                    if (catTasks.length > 0) {
+                        const ws_data = [
+                            ["TÍTULO", "DESCRIÇÃO", "CATEGORIA", "ATRIBUÍDO A", "STATUS"],
+                            ...catTasks.map(t => [t.title, t.description || "", t.category, t.assignedTo, t.status])
+                        ];
+                        const ws = XLSX.utils.aoa_to_sheet(ws_data);
+                        // Limitar nome da aba a 31 caracteres (regra do Excel)
+                        const sheetName = cat.substring(0, 30);
+                        XLSX.utils.book_append_sheet(wb, ws, sheetName);
+                    }
+                });
+                XLSX.writeFile(wb, `Relatorio_Geral_Demandas_${timestamp}.xlsx`);
+            }
         }
 
         window.handleLogout = () => location.reload();
